@@ -76,6 +76,16 @@ class IptvRepository(private val context: Context) {
         return "$base/player_api.php?username=$user&password=$pass&action=$action"
     }
 
+    // قراءة حقل من JSON: نستخدم nextString لأي نوع لأنه يدعم النص والأرقام والقيم المنطقية
+    private fun readValue(r: JsonReader): String {
+        return try {
+            r.nextString()
+        } catch (_: Exception) {
+            r.skipValue()
+            ""
+        }
+    }
+
     private fun streamArray(input: InputStream, onItem: (Map<String, String>) -> Unit) {
         JsonReader(input.bufferedReader()).use { r ->
             r.beginArray()
@@ -84,15 +94,7 @@ class IptvRepository(private val context: Context) {
                 val map = HashMap<String, String>(8)
                 while (r.hasNext()) {
                     val key = r.nextName()
-                    try {
-                        val tk = r.peek()
-                        when (tk) {
-                            JsonReader.Token.STRING -> map[key] = r.nextString()
-                            JsonReader.Token.NUMBER -> map[key] = r.nextString()
-                            JsonReader.Token.BOOLEAN -> map[key] = r.nextBoolean().toString()
-                            else -> r.skipValue()
-                        }
-                    } catch (_: Exception) { r.skipValue() }
+                    map[key] = readValue(r)
                 }
                 r.endObject()
                 onItem(map)
@@ -104,7 +106,6 @@ class IptvRepository(private val context: Context) {
     fun loadXtreamLive(host: String, user: String, pass: String): List<Channel> {
         val base = host.trimEnd('/')
         val list = ArrayList<Channel>(2000)
-        var i = 0
         openStream(xtreamUrl(host, user, pass, "get_live_streams")).use { input ->
             streamArray(input) { m ->
                 val id = m["stream_id"].orEmpty()
@@ -118,7 +119,6 @@ class IptvRepository(private val context: Context) {
                         type = ChannelType.LIVE
                     )
                 }
-                i++
             }
         }
         return list
