@@ -1,6 +1,8 @@
 package com.example.iptvplayer.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -8,8 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -46,6 +46,7 @@ import androidx.media3.ui.PlayerView
 import com.example.iptvplayer.MainViewModel
 import com.example.iptvplayer.Screen
 import com.example.iptvplayer.UiState
+import com.example.iptvplayer.data.Channel
 
 @Composable
 fun App(vm: MainViewModel) {
@@ -108,6 +109,25 @@ fun AddSubscriptionScreen(vm: MainViewModel, state: UiState) {
     }
 }
 
+@Composable
+fun ChannelRow(ch: Channel, onClick: () -> Unit) {
+    Column {
+        ListItem(
+            headlineContent = {
+                Text(ch.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            },
+            supportingContent = {
+                val g = ch.group
+                if (g != null && g.isNotEmpty()) {
+                    Text("تصنيف: $g")
+                }
+            },
+            modifier = Modifier.clickable { onClick() }
+        )
+        HorizontalDivider()
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ContentScreen(vm: MainViewModel, state: UiState) {
@@ -131,18 +151,14 @@ fun ContentScreen(vm: MainViewModel, state: UiState) {
             label = { Text("بحث") },
             modifier = Modifier.fillMaxWidth().padding(8.dp)
         )
-        LazyColumn(Modifier.fillMaxSize()) {
-            items(state.channels) { ch ->
-                ListItem(
-                    headlineContent = { Text(ch.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    supportingContent = {
-                        if (!ch.group.isNullOrBlank()) {
-                            Text("تصنيف: ${ch.group}")
-                        }
-                    },
-                    modifier = Modifier.clickable { vm.openPlayer(ch) }
-                )
-                HorizontalDivider()
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+        ) {
+            val list = state.channels
+            for (ch in list) {
+                ChannelRow(ch = ch, onClick = { vm.openPlayer(ch) })
             }
         }
     }
