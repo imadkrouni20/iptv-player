@@ -4,7 +4,9 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.iptvplayer.data.Channel
+import com.example.iptvplayer.data.ChannelType
 import com.example.iptvplayer.data.IptvRepository
+import com.example.iptvplayer.data.StalkerClient
 import com.example.iptvplayer.data.SubscriptionStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -84,6 +86,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun saveStalker(portal: String, mac: String) {
+        store.clear(); store.saveType("stalker")
+        store.save(mapOf("host" to portal, "mac" to mac))
+        _state.value = _state.value.copy(loading = true, error = null)
+        viewModelScope.launch {
+            try {
+                val client = StalkerClient(portal, mac)
+                val live = withContext(Dispatchers.IO) { client.loadLiveChannels() }
+                val vod = try {
+                    withContext(Dispatchers.IO) { client.loadVod() }
+                } catch (_: Exception) { emptyList() }
+                _state.value = _state.value.copy(
+                    loading = false,
+                    liveChannels = live,
+                    vodChannels = vod,
+                    seriesChannels = emptyList(),
+                    channels = live,
+                    screen = Screen.Content,
+                    savedType = "stalker",
+                    tab = 0
+                )
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(loading = false, error = e.message ?: "خطأ")
+            }
+        }
+    }
+
     fun autoLoad() {
         when (store.getType()) {
             "m3u" -> store.get("url")?.let { saveM3u(it) }
@@ -91,13 +120,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val h = store.get("host"); val u = store.get("user"); val p = store.get("pass")
                 if (h != null && u != null && p != null) saveXtream(h, u, p)
             }
+            "stalker" -> {
+                val h = store.get("host"); val m = store.get("mac")
+                if (h != null && m != null) saveStalker(h, m)
+            }
         }
     }
 
     fun setTab(i: Int) {
         val s = _state.value
         val list = when (i) {
-            0 -> if (s.savedType == "m3u") s.liveChannels else s.liveChannels
+            0 -> s.liveChannels
             1 -> s.vodChannels
             else -> s.seriesChannels
         }
@@ -116,8 +149,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun openPlayer(c: Channel) {
-        if (c.url.isBlank()) return
-        _state.value = _state.value.copy(screen = Screen.Player(c.url, c.name))
+        val s = _state.value
+        if (s.savedType == "stalker") {
+            _state.value = s.copy(loading = true, error = null)
+            viewModelScope.launch {
+                try {
+                    val host = store.get("host") ?: error("لا يوجد host")
+                    val mac = store.get("mac") ?: error("لا يوجد mac")
+                    val client = StalkerClient(host, mac)
+                    val realUrl = withContext(Dispatchers.IO) {
+                        client.handshake()
+                        client.getProfile()
+                        client.createLink(c.url, c.type)
+                    }
+                    if (realUrl.isBlank()) error("فشل الحصول على رابط البث")
+                    _state.value = _state.value.copy(
+                        loading = false,
+                        screen = Screen.Player(realUrl, c.name)
+                    )
+                } catch (e: Exception) {
+                    _state.value = _state.value.copy(loading = false, error = e.message ?: "خطأ")
+                }
+            }
+        } else {
+            if (c.url.isBlank()) return
+            _state.value = s.copy(screen = Screen.Player(c.url, c.name))
+        }
     }
 
     fun backToList() {
