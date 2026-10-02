@@ -4,7 +4,9 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.iptvplayer.data.Channel
+import com.example.iptvplayer.data.ChannelType
 import com.example.iptvplayer.data.IptvRepository
+import com.example.iptvplayer.data.Season
 import com.example.iptvplayer.data.StalkerClient
 import com.example.iptvplayer.data.Subscription
 import com.example.iptvplayer.data.SubscriptionStore
@@ -19,6 +21,7 @@ sealed class Screen {
     object SubscriptionsList : Screen()
     object AddSubscription : Screen()
     object Content : Screen()
+    data class SeriesDetail(val seriesId: String, val seriesName: String) : Screen()
     data class Player(val url: String, val title: String) : Screen()
 }
 
@@ -36,7 +39,11 @@ data class UiState(
     val seriesChannels: List<Channel> = emptyList(),
     val tab: Int = 0,
     val search: String = "",
-    val sortMode: SortMode = SortMode.DEFAULT
+    val sortMode: SortMode = SortMode.DEFAULT,
+    val seasons: List<Season> = emptyList(),
+    val currentSeasonIdx: Int = 0,
+    val episodes: List<Channel> = emptyList(),
+    val seriesLoading: Boolean = false
 )
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -58,8 +65,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun goSubscriptionsList() {
         _state.value = _state.value.copy(
-            screen = Screen.SubscriptionsList,
-            error = null,
+            screen = Screen.SubscriptionsList, error = null,
             liveChannels = emptyList(), vodChannels = emptyList(),
             seriesChannels = emptyList(), channels = emptyList(),
             currentSub = null, search = "", tab = 0, sortMode = SortMode.DEFAULT
@@ -68,28 +74,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun addM3u(name: String, url: String) {
-        val sub = Subscription(
-            id = UUID.randomUUID().toString(),
-            name = name.ifBlank { "M3U" }, type = "m3u", m3uUrl = url
-        )
+        val sub = Subscription(UUID.randomUUID().toString(),
+            name.ifBlank { "M3U" }, "m3u", m3uUrl = url)
         store.upsert(sub); refreshSubscriptions(); connect(sub)
     }
 
     fun addXtream(name: String, host: String, user: String, pass: String) {
-        val sub = Subscription(
-            id = UUID.randomUUID().toString(),
-            name = name.ifBlank { "Xtream" }, type = "xtream",
-            host = host, user = user, pass = pass
-        )
+        val sub = Subscription(UUID.randomUUID().toString(),
+            name.ifBlank { "Xtream" }, "xtream", host = host, user = user, pass = pass)
         store.upsert(sub); refreshSubscriptions(); connect(sub)
     }
 
     fun addStalker(name: String, portal: String, mac: String) {
-        val sub = Subscription(
-            id = UUID.randomUUID().toString(),
-            name = name.ifBlank { "Stalker" }, type = "stalker",
-            host = portal, mac = mac
-        )
+        val sub = Subscription(UUID.randomUUID().toString(),
+            name.ifBlank { "Stalker" }, "stalker", host = portal, mac = mac)
         store.upsert(sub); refreshSubscriptions(); connect(sub)
     }
 
@@ -120,19 +118,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         val live = withContext(Dispatchers.IO) {
                             repo.loadXtreamLive(sub.host, sub.user, sub.pass)
                         }
-                        val vod = try {
-                            withContext(Dispatchers.IO) {
-                                repo.loadXtreamVod(sub.host, sub.user, sub.pass)
-                            }
-                        } catch (_: Throwable) { emptyList() }
-                        val series = try {
-                            withContext(Dispatchers.IO) {
-                                repo.loadXtreamSeries(sub.host, sub.user, sub.pass)
-                            }
-                        } catch (_: Throwable) { emptyList() }
+                        val vod = try { withContext(Dispatchers.IO) {
+                            repo.loadXtreamVod(sub.host, sub.user, sub.pass) } } catch (_: Throwable) { emptyList() }
+                        val series = try { withContext(Dispatchers.IO) {
+                            repo.loadXtreamSeries(sub.host, sub.user, sub.pass) } } catch (_: Throwable) { emptyList() }
                         _state.value = _state.value.copy(
-                            loading = false,
-                            liveChannels = live, vodChannels = vod, seriesChannels = series,
+                            loading = false, liveChannels = live, vodChannels = vod, seriesChannels = series,
                             channels = applySort(live, _state.value.sortMode),
                             screen = Screen.Content, tab = 0
                         )
@@ -140,13 +131,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     "stalker" -> {
                         val client = StalkerClient(sub.host, sub.mac)
                         val live = withContext(Dispatchers.IO) { client.loadLiveChannels() }
-                        val vod = try {
-                            withContext(Dispatchers.IO) { client.loadVod() }
-                        } catch (_: Throwable) { emptyList() }
+                        val vod = try { withContext(Dispatchers.IO) { client.loadVod() } } catch (_: Throwable) { emptyList() }
+                        val series = try { withContext(Dispatchers.IO) { client.loadSeries() } } catch (_: Throwable) { emptyList() }
                         _state.value = _state.value.copy(
-                            loading = false,
-                            liveChannels = live, vodChannels = vod,
-                            seriesChannels = emptyList(),
+                            loading = false, liveChannels = live, vodChannels = vod, seriesChannels = series,
                             channels = applySort(live, _state.value.sortMode),
                             screen = Screen.Content, tab = 0
                         )
@@ -179,8 +167,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setTab(i: Int) {
-        _state.value = _state.value.copy(tab = i, search = "")
-        recomputeChannels()
+        _state.value = _state.value.copy(tab = i, search = ""); recomputeChannels()
     }
     fun setSearch(q: String) {
         _state.value = _state.value.copy(search = q); recomputeChannels()
@@ -188,9 +175,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setSortMode(mode: SortMode) {
         _state.value = _state.value.copy(sortMode = mode); recomputeChannels()
     }
-    fun clearError() {
-        _state.value = _state.value.copy(error = null)
-    }
+    fun clearError() { _state.value = _state.value.copy(error = null) }
 
     fun openPlayer(c: Channel) {
         val s = _state.value
@@ -201,8 +186,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val sub = s.currentSub
                     val client = StalkerClient(sub.host, sub.mac)
                     val realUrl = withContext(Dispatchers.IO) {
-                        client.handshake()
-                        client.getProfile()
+                        client.handshake(); client.getProfile()
                         client.createLink(c.url, c.type)
                     }
                     if (realUrl.isBlank()) error("فشل الحصول على رابط البث")
@@ -217,6 +201,98 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (c.url.isBlank()) return
             _state.value = s.copy(screen = Screen.Player(c.url, c.name))
         }
+    }
+
+    fun openSeries(series: Channel) {
+        val sub = _state.value.currentSub ?: return
+        _state.value = _state.value.copy(
+            screen = Screen.SeriesDetail(series.url, series.name),
+            seasons = emptyList(), episodes = emptyList(),
+            currentSeasonIdx = 0, seriesLoading = true, error = null
+        )
+        viewModelScope.launch {
+            try {
+                val client = StalkerClient(sub.host, sub.mac)
+                val seasons = withContext(Dispatchers.IO) {
+                    client.handshake(); client.getProfile()
+                    client.loadSeasons(series.url)
+                }
+                if (seasons.isEmpty()) {
+                    _state.value = _state.value.copy(seriesLoading = false,
+                        error = "لا توجد مواسم لهذا المسلسل")
+                    return@launch
+                }
+                val eps = withContext(Dispatchers.IO) {
+                    client.loadEpisodes(series.url, seasons[0].id)
+                }
+                _state.value = _state.value.copy(
+                    seasons = seasons, currentSeasonIdx = 0,
+                    episodes = eps, seriesLoading = false
+                )
+            } catch (t: Throwable) {
+                _state.value = _state.value.copy(seriesLoading = false, error = safeError(t))
+            }
+        }
+    }
+
+    fun selectSeason(idx: Int) {
+        val s = _state.value
+        if (idx !in s.seasons.indices) return
+        val sub = s.currentSub ?: return
+        val seriesScreen = s.screen as? Screen.SeriesDetail ?: return
+        _state.value = s.copy(currentSeasonIdx = idx, seriesLoading = true, error = null)
+        viewModelScope.launch {
+            try {
+                val client = StalkerClient(sub.host, sub.mac)
+                val eps = withContext(Dispatchers.IO) {
+                    client.handshake(); client.getProfile()
+                    client.loadEpisodes(seriesScreen.seriesId, s.seasons[idx].id)
+                }
+                _state.value = _state.value.copy(episodes = eps, seriesLoading = false)
+            } catch (t: Throwable) {
+                _state.value = _state.value.copy(seriesLoading = false, error = safeError(t))
+            }
+        }
+    }
+
+    fun playEpisode(ep: Channel) {
+        val s = _state.value
+        val sub = s.currentSub ?: return
+        _state.value = s.copy(loading = true, error = null)
+        viewModelScope.launch {
+            try {
+                val client = StalkerClient(sub.host, sub.mac)
+                val realUrl = withContext(Dispatchers.IO) {
+                    client.handshake(); client.getProfile()
+                    client.createLink(ep.url, ChannelType.EPISODE)
+                }
+                if (realUrl.isBlank()) error("فشل الحصول على رابط البث")
+                _state.value = _state.value.copy(
+                    loading = false, screen = Screen.Player(realUrl, ep.name)
+                )
+            } catch (t: Throwable) {
+                _state.value = _state.value.copy(loading = false, error = safeError(t))
+            }
+        }
+    }
+
+    fun backFromPlayer() {
+        val s = _state.value
+        val back = if (s.screen is Screen.Player && s.seasons.isNotEmpty())
+            Screen.SeriesDetail("", "") else Screen.Content
+        // إذا كنّا في مسار مسلسل، نرجع لشاشة المسلسل
+        if (s.episodes.isNotEmpty() && back == Screen.Content) {
+            _state.value = s.copy(screen = Screen.Content)
+        } else {
+            _state.value = s.copy(screen = Screen.Content)
+        }
+    }
+
+    fun backFromSeries() {
+        _state.value = _state.value.copy(
+            screen = Screen.Content, seasons = emptyList(),
+            episodes = emptyList(), seriesLoading = false, error = null
+        )
     }
 
     fun backToList() {

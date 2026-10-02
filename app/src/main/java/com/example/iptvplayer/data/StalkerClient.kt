@@ -30,43 +30,33 @@ class StalkerClient(
         var p = portalUrl.trim()
         if (!p.startsWith("http")) p = "http://$p"
         p = p.trimEnd('/')
-        listOf(
-            "/portal.php", "/server/load.php",
-            "/stalker_portal/server/load.php", "/c"
-        ).forEach { suffix ->
+        listOf("/portal.php", "/server/load.php",
+            "/stalker_portal/server/load.php", "/c").forEach { suffix ->
             if (p.endsWith(suffix)) p = p.dropLast(suffix.length).trimEnd('/')
         }
-        val hostPart = p.removePrefix("http://").removePrefix("https://")
-        add("http://$hostPart")
+        add("http://" + p.removePrefix("http://").removePrefix("https://"))
     }.distinct()
 
-    private val endpointSuffixes = listOf(
-        "/portal.php",
-        "/c/portal.php",
-        "/server/load.php"
-    )
+    private val endpointSuffixes = listOf("/portal.php", "/c/portal.php", "/server/load.php")
 
     private fun candidateUrls(params: String): List<String> {
         val result = mutableListOf<String>()
         activeEndpoint?.let { result += "$it?$params&JsHttpRequest=1-xml" }
-        for (base in baseUrls) {
-            for (suffix in endpointSuffixes) {
-                val url = "$base$suffix?$params&JsHttpRequest=1-xml"
-                if (!result.contains(url)) result += url
-            }
+        for (base in baseUrls) for (s in endpointSuffixes) {
+            val u = "$base$s?$params&JsHttpRequest=1-xml"
+            if (!result.contains(u)) result += u
         }
         return result
     }
 
     private fun rawGet(url: String): String {
-        val builder = Request.Builder()
-            .url(url)
+        val b = Request.Builder().url(url)
             .header("Cookie", cookie)
             .header("User-Agent", userAgent)
             .header("X-User-Agent", "Model: MAG250; Link: WiFi")
             .header("Accept", "*/*")
-        if (token.isNotEmpty()) builder.header("Authorization", "Bearer $token")
-        http.newCall(builder.build()).execute().use { resp ->
+        if (token.isNotEmpty()) b.header("Authorization", "Bearer $token")
+        http.newCall(b.build()).execute().use { resp ->
             if (!resp.isSuccessful) error("HTTP ${resp.code}")
             return resp.body?.string() ?: error("Empty body")
         }
@@ -85,17 +75,15 @@ class StalkerClient(
                 if (activeEndpoint == null) activeEndpoint = url.substringBefore("?")
                 return body
             } catch (e: Throwable) {
-                val msg = e.message?.take(80) ?: e.javaClass.simpleName
-                errors += "${url.substringBefore("?")}: $msg"
+                errors += "${url.substringBefore("?")}: ${e.message?.take(80) ?: e.javaClass.simpleName}"
             }
         }
-        val joined = errors.joinToString("\n")
-        throw Exception(joined.take(600))
+        throw Exception(errors.joinToString("\n").take(600))
     }
 
     fun handshake() {
         val body = request(
-            params = "type=stb&action=handshake&prehash=0&token=",
+            "type=stb&action=handshake&prehash=0&token=",
             validate = { it.contains("\"js\"") }
         )
         val js = try { JSONObject(body).optJSONObject("js") } catch (_: Exception) { null }
@@ -112,14 +100,12 @@ class StalkerClient(
                     "&device_id=&device_id2=&signature=&auth_second_step=1&hw_version=1.7-BD-00" +
                     "&not_valid_token=0&metrics=%7B%7D&api_signature=262&mkv=true&hls=true"
             )
-        } catch (_: Throwable) { /* بعض البوابات لا تحتاج profile */ }
+        } catch (_: Throwable) {}
     }
 
     fun loadLiveChannels(): List<Channel> {
-        handshake()
-        getProfile()
-        val body = request("type=itv&action=get_all_channels")
-        val js = try { JSONObject(body).optJSONObject("js") } catch (_: Exception) { null }
+        handshake(); getProfile()
+        val js = try { JSONObject(request("type=itv&action=get_all_channels")).optJSONObject("js") } catch (_: Exception) { null }
             ?: return emptyList()
         val data = js.optJSONArray("data") ?: return emptyList()
         val list = mutableListOf<Channel>()
@@ -132,7 +118,7 @@ class StalkerClient(
                 id = "sl_${rawId.ifBlank { "i$i" }}_$i",
                 name = o.optString("name", "Channel"),
                 url = cmd,
-                logo = o.optString("logo").takeIf { it.isNotBlank() },
+                logo = o.optString("logo").takeIf { it.isNotBlank() && it != "null" },
                 group = o.optString("tv_genre_id").takeIf { it.isNotBlank() },
                 type = ChannelType.LIVE
             )
@@ -141,12 +127,9 @@ class StalkerClient(
     }
 
     fun loadVod(): List<Channel> {
-        handshake()
-        getProfile()
-        val body = request(
-            "type=vod&action=get_ordered_list&category=*&genre=*" +
-                "&force_ch_link_check=&fav=0&sortby=added&hd=0&p=1"
-        )
+        handshake(); getProfile()
+        val body = request("type=vod&action=get_ordered_list&category=*&genre=*" +
+            "&force_ch_link_check=&fav=0&sortby=added&hd=0&p=1")
         val js = try { JSONObject(body).optJSONObject("js") } catch (_: Exception) { null }
             ?: return emptyList()
         val data = js.optJSONArray("data") ?: return emptyList()
@@ -160,7 +143,7 @@ class StalkerClient(
                 id = "sv_${rawId.ifBlank { "i$i" }}_$i",
                 name = o.optString("name", "Movie"),
                 url = cmd,
-                logo = o.optString("screenshot_uri").takeIf { it.isNotBlank() },
+                logo = o.optString("screenshot_uri").takeIf { it.isNotBlank() && it != "null" },
                 group = null,
                 type = ChannelType.MOVIE
             )
@@ -168,13 +151,79 @@ class StalkerClient(
         return list
     }
 
+    fun loadSeries(): List<Channel> {
+        handshake(); getProfile()
+        val body = request("type=series&action=get_ordered_list&category=*&genre=*" +
+            "&force_ch_link_check=&fav=0&sortby=added&hd=0&p=1")
+        val js = try { JSONObject(body).optJSONObject("js") } catch (_: Exception) { null }
+            ?: return emptyList()
+        val data = js.optJSONArray("data") ?: return emptyList()
+        val list = mutableListOf<Channel>()
+        for (i in 0 until data.length()) {
+            val o = try { data.getJSONObject(i) } catch (_: Exception) { continue }
+            val rawId = o.optString("id")
+            list += Channel(
+                id = "ss_${rawId.ifBlank { "i$i" }}_$i",
+                name = o.optString("name", "Series"),
+                url = rawId,
+                logo = o.optString("screenshot_uri").takeIf { it.isNotBlank() && it != "null" },
+                group = null,
+                type = ChannelType.SERIES
+            )
+        }
+        return list
+    }
+
+    fun loadSeasons(seriesId: String): List<Season> {
+        val body = request("type=series&action=get_ordered_list&movie_id=$seriesId")
+        val js = try { JSONObject(body).optJSONObject("js") } catch (_: Exception) { null }
+            ?: return emptyList()
+        val arr = js.optJSONArray("data") ?: return emptyList()
+        val seasons = mutableListOf<Season>()
+        for (i in 0 until arr.length()) {
+            val o = try { arr.getJSONObject(i) } catch (_: Exception) { continue }
+            val sid = o.optString("id")
+            val num = o.optInt("season_number", i + 1)
+            val name = o.optString("name").ifBlank { "الموسم $num" }
+            if (sid.isNotEmpty()) seasons += Season(sid, name, num)
+        }
+        return seasons.sortedBy { it.number }
+    }
+
+    fun loadEpisodes(seriesId: String, seasonId: String): List<Channel> {
+        val body = request("type=series&action=get_ordered_list&movie_id=$seriesId&season_id=$seasonId")
+        val js = try { JSONObject(body).optJSONObject("js") } catch (_: Exception) { null }
+            ?: return emptyList()
+        val arr = js.optJSONArray("data") ?: return emptyList()
+        val eps = mutableListOf<Channel>()
+        for (i in 0 until arr.length()) {
+            val o = try { arr.getJSONObject(i) } catch (_: Exception) { continue }
+            val id = o.optString("id")
+            val cmd = o.optString("cmd")
+            if (cmd.isEmpty()) continue
+            val num = o.optInt("series_number", i + 1)
+            val title = o.optString("name").ifBlank { "حلقة $num" }
+            eps += Channel(
+                id = "se_${id}_$i",
+                name = "%02d. %s".format(num, title),
+                url = cmd,
+                logo = o.optString("screenshot_uri").takeIf { it.isNotBlank() && it != "null" },
+                group = null,
+                type = ChannelType.EPISODE
+            )
+        }
+        return eps.sortedBy { it.name }
+    }
+
     fun createLink(cmd: String, type: ChannelType): String {
-        val t = if (type == ChannelType.MOVIE) "vod" else "itv"
+        val t = when (type) {
+            ChannelType.MOVIE -> "vod"
+            ChannelType.SERIES, ChannelType.EPISODE -> "series"
+            else -> "itv"
+        }
         val encoded = URLEncoder.encode(cmd, "UTF-8")
-        val body = request(
-            "type=$t&action=create_link&cmd=$encoded&series=&forced_storage=undefined" +
-                "&disable_ad=0&download=0&force_ch_link_check=0"
-        )
+        val body = request("type=$t&action=create_link&cmd=$encoded&series=" +
+            "&forced_storage=undefined&disable_ad=0&download=0&force_ch_link_check=0")
         val js = try { JSONObject(body).optJSONObject("js") } catch (_: Exception) { null }
             ?: error("create_link: استجابة غير صالحة")
         var link = js.optString("cmd", "")
