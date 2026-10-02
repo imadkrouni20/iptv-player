@@ -125,18 +125,3 @@ class IptvRepository(private val context: Context) {
         return list
     }
 }
-
-class SubscriptionStore(context: Context) {
-    private val prefs = context.getSharedPreferences("sub_prefs", Context.MODE_PRIVATE)
-
-    fun saveType(t: String) = prefs.edit().putString("type", t).apply()
-    fun getType(): String? = prefs.getString("type", null)
-
-    fun save(map: Map<String, String>) {
-        val e = prefs.edit()
-        map.forEach { (k, v) -> e.putString(k, v) }
-        e.apply()
-    }
-    fun get(key: String): String? = prefs.getString(key, null)
-    fun clear() = prefs.edit().clear().apply()
-}
