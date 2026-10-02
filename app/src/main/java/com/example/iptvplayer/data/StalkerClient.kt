@@ -7,36 +7,64 @@ import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 class StalkerClient(
-    private val portalUrl: String,
+    portalUrl: String,
     private val mac: String,
-    private val timezone: String = "Europe/Paris"
+    private val timezone: String = "Africa/Casablanca"
 ) {
     private val http = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(20, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
         .followRedirects(true)
+        .followSslRedirects(true)
         .build()
 
     private var token: String = ""
-    private val cookie: String = "mac=$mac; stb_lang=en; timezone=$timezone"
+    private var activeEndpoint: String? = null
+
+    private val cookie = "mac=$mac; stb_lang=en; timezone=$timezone"
     private val userAgent =
         "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 4 rev: 2721 Safari/533.3"
 
-    private fun baseUrl(): String {
+    private val baseCandidates: List<String> = buildList {
         var p = portalUrl.trim()
         if (!p.startsWith("http")) p = "http://$p"
         p = p.trimEnd('/')
-        if (p.endsWith("/c")) p = p.dropLast(2)
-        return p
+        listOf(
+            "/portal.php",
+            "/server/load.php",
+            "/stalker_portal/server/load.php",
+            "/c"
+        ).forEach { suffix ->
+            if (p.endsWith(suffix)) p = p.dropLast(suffix.length).trimEnd('/')
+        }
+        add(p)
+        if (p.startsWith("http://")) add("https://" + p.removePrefix("http://"))
+    }.distinct()
+
+    private val endpointSuffixes = listOf(
+        "/portal.php",
+        "/server/load.php",
+        "/stalker_portal/server/load.php",
+        "/c/portal.php"
+    )
+
+    private fun candidateUrls(params: String): List<String> {
+        val result = mutableListOf<String>()
+        for (base in baseCandidates) {
+            for (suffix in endpointSuffixes) {
+                result += "$base$suffix?$params&JsHttpRequest=1-xml"
+            }
+        }
+        val active = activeEndpoint
+        if (active != null) {
+            val activeUrl = "$active?$params&JsHttpRequest=1-xml"
+            result.remove(activeUrl)
+            result.add(0, activeUrl)
+        }
+        return result
     }
 
-    private fun portalPhp(): String {
-        val b = baseUrl()
-        return if (b.contains("/stalker_portal")) "$b/server/load.php" else "$b/portal.php"
-    }
-
-    private fun request(params: String): String {
-        val url = "${portalPhp()}?$params&JsHttpRequest=1-xml"
+    private fun rawGet(url: String): String {
         val builder = Request.Builder()
             .url(url)
             .header("Cookie", cookie)
@@ -50,12 +78,38 @@ class StalkerClient(
         }
     }
 
+    private fun request(params: String, validate: ((String) -> Boolean)? = null): String {
+        val urls = candidateUrls(params)
+        val tried = mutableListOf<String>()
+        var lastError: Exception? = null
+        for (url in urls) {
+            tried += url.substringBefore("?")
+            try {
+                val body = rawGet(url)
+                if (validate != null && !validate(body)) {
+                    lastError = IllegalStateException("استجابة غير صالحة")
+                    continue
+                }
+                if (activeEndpoint == null) activeEndpoint = url.substringBefore("?")
+                return body
+            } catch (e: Exception) {
+                lastError = e
+            }
+        }
+        val triedList = tried.distinct().joinToString("\n")
+        throw lastError?.let { Exception("${it.message}\n\nالمسارات المجرَّبة:\n$triedList") }
+            ?: error("فشل الاتصال\n$triedList")
+    }
+
     fun handshake() {
-        val body = request("type=stb&action=handshake&prehash=0&token=")
+        val body = request(
+            params = "type=stb&action=handshake&prehash=0&token=",
+            validate = { it.contains("\"js\"") }
+        )
         val json = JSONObject(body)
-        val js = json.optJSONObject("js") ?: error("Handshake: no js")
+        val js = json.optJSONObject("js") ?: error("استجابة handshake غير صالحة: $body")
         token = js.optString("token", "")
-        if (token.isEmpty()) error("توكن فارغ - تحقق من MAC أو البوابة")
+        if (token.isEmpty()) error("توكن فارغ - الـ MAC غير مُفعّل على هذه البوابة")
     }
 
     fun getProfile() {
@@ -129,7 +183,6 @@ class StalkerClient(
         val js = json.optJSONObject("js") ?: error("create_link: no js")
         var link = js.optString("cmd", "")
         if (link.isEmpty()) link = js.optString("id", "")
-        // قد يكون "ffmpeg http://..." أو "auto http://..."
         val idx = link.indexOf("http")
         if (idx > 0) link = link.substring(idx)
         return link.trim()
