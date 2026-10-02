@@ -46,9 +46,7 @@ import androidx.media3.ui.PlayerView
 import com.example.iptvplayer.MainViewModel
 import com.example.iptvplayer.Screen
 import com.example.iptvplayer.UiState
-import com.example.iptvplayer.data.Channel
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun App(vm: MainViewModel) {
     val state by vm.state.collectAsState()
@@ -137,7 +135,11 @@ fun ContentScreen(vm: MainViewModel, state: UiState) {
             items(state.channels) { ch ->
                 ListItem(
                     headlineContent = { Text(ch.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    supportingContent = ch.group?.let { g -> { Text("تصنيف: $g") } },
+                    supportingContent = {
+                        if (!ch.group.isNullOrBlank()) {
+                            Text("تصنيف: ${ch.group}")
+                        }
+                    },
                     modifier = Modifier.clickable { vm.openPlayer(ch) }
                 )
                 HorizontalDivider()
