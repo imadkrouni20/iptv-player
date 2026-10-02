@@ -16,8 +16,21 @@ android {
         versionName = "1.0"
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("iptv-release.keystore")
+            storePassword = "iptv123456"
+            keyAlias = "iptvkey"
+            keyPassword = "iptv123456"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("release")
+        }
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
         }
     }

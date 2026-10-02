@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.pm.ActivityInfo
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -271,7 +273,7 @@ fun AddSubscriptionScreen(vm: MainViewModel, state: UiState) {
         }
     ) { pad ->
         Column(
-            Modifier.fillMaxSize().padding(pad).padding(16.dp),
+            Modifier.fillMaxSize().padding(pad).padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             OutlinedTextField(name, { name = it }, label = { Text("اسم الاشتراك") },
