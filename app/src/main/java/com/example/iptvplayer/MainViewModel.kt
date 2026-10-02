@@ -4,7 +4,6 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.iptvplayer.data.Channel
-import com.example.iptvplayer.data.ChannelType
 import com.example.iptvplayer.data.IptvRepository
 import com.example.iptvplayer.data.StalkerClient
 import com.example.iptvplayer.data.SubscriptionStore
@@ -30,6 +29,7 @@ data class UiState(
     val seriesChannels: List<Channel> = emptyList(),
     val tab: Int = 0,
     val savedType: String? = null,
+    val savedName: String? = null,
     val search: String = ""
 )
 
@@ -37,11 +37,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = IptvRepository(app)
     private val store = SubscriptionStore(app)
 
-    private val _state = MutableStateFlow(UiState(savedType = store.getType()))
+    private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state
 
-    fun saveM3u(url: String) {
-        store.clear(); store.saveType("m3u"); store.save(mapOf("url" to url))
+    fun saveM3u(url: String, name: String) {
+        store.clear(); store.saveType("m3u")
+        store.save(mapOf("url" to url, "name" to name))
         _state.value = _state.value.copy(loading = true, error = null)
         viewModelScope.launch {
             try {
@@ -51,7 +52,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     liveChannels = list,
                     channels = list,
                     screen = Screen.Content,
-                    savedType = "m3u"
+                    savedType = "m3u",
+                    savedName = name
                 )
             } catch (e: Exception) {
                 _state.value = _state.value.copy(loading = false, error = e.message ?: "خطأ")
@@ -59,14 +61,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun saveXtream(host: String, user: String, pass: String) {
+    fun saveXtream(host: String, user: String, pass: String, name: String) {
         store.clear(); store.saveType("xtream")
-        store.save(mapOf("host" to host, "user" to user, "pass" to pass))
+        store.save(mapOf("host" to host, "user" to user, "pass" to pass, "name" to name))
         _state.value = _state.value.copy(loading = true, error = null)
         viewModelScope.launch {
             try {
                 val live = withContext(Dispatchers.IO) { repo.loadXtreamLive(host, user, pass) }
-                val vod = withContext(Dispatchers.IO) { repo.loadXtreamVod(host, user, pass) }
+                val vod = try {
+                    withContext(Dispatchers.IO) { repo.loadXtreamVod(host, user, pass) }
+                } catch (_: Exception) { emptyList() }
                 val series = try {
                     withContext(Dispatchers.IO) { repo.loadXtreamSeries(host, user, pass) }
                 } catch (_: Exception) { emptyList() }
@@ -78,6 +82,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     channels = live,
                     screen = Screen.Content,
                     savedType = "xtream",
+                    savedName = name,
                     tab = 0
                 )
             } catch (e: Exception) {
@@ -86,9 +91,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun saveStalker(portal: String, mac: String) {
+    fun saveStalker(portal: String, mac: String, name: String) {
         store.clear(); store.saveType("stalker")
-        store.save(mapOf("host" to portal, "mac" to mac))
+        store.save(mapOf("host" to portal, "mac" to mac, "name" to name))
         _state.value = _state.value.copy(loading = true, error = null)
         viewModelScope.launch {
             try {
@@ -105,24 +110,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     channels = live,
                     screen = Screen.Content,
                     savedType = "stalker",
+                    savedName = name,
                     tab = 0
                 )
             } catch (e: Exception) {
                 _state.value = _state.value.copy(loading = false, error = e.message ?: "خطأ")
-            }
-        }
-    }
-
-    fun autoLoad() {
-        when (store.getType()) {
-            "m3u" -> store.get("url")?.let { saveM3u(it) }
-            "xtream" -> {
-                val h = store.get("host"); val u = store.get("user"); val p = store.get("pass")
-                if (h != null && u != null && p != null) saveXtream(h, u, p)
-            }
-            "stalker" -> {
-                val h = store.get("host"); val m = store.get("mac")
-                if (h != null && m != null) saveStalker(h, m)
             }
         }
     }
