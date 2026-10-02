@@ -1,8 +1,10 @@
 package com.example.iptvplayer.data
 
+import android.util.JsonReader
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
+import java.io.InputStream
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
@@ -12,9 +14,9 @@ class StalkerClient(
     private val timezone: String = "Africa/Casablanca"
 ) {
     private val http = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS)
-        .callTimeout(12, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .callTimeout(120, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
         .build()
@@ -49,36 +51,53 @@ class StalkerClient(
         return result
     }
 
-    private fun rawGet(url: String): String {
+    private fun buildRequest(url: String): Request {
         val b = Request.Builder().url(url)
             .header("Cookie", cookie)
             .header("User-Agent", userAgent)
             .header("X-User-Agent", "Model: MAG250; Link: WiFi")
             .header("Accept", "*/*")
         if (token.isNotEmpty()) b.header("Authorization", "Bearer $token")
-        http.newCall(b.build()).execute().use { resp ->
-            if (!resp.isSuccessful) error("HTTP ${resp.code}")
-            return resp.body?.string() ?: error("Empty body")
-        }
+        return b.build()
     }
 
+    // طلب نصي عادي (للردود الصغيرة)
     private fun request(params: String, validate: ((String) -> Boolean)? = null): String {
         val urls = candidateUrls(params)
         val errors = mutableListOf<String>()
         for (url in urls) {
             try {
-                val body = rawGet(url)
-                if (validate != null && !validate(body)) {
-                    errors += "${url.substringBefore("?")}: استجابة غير صالحة"
-                    continue
+                http.newCall(buildRequest(url)).execute().use { resp ->
+                    if (!resp.isSuccessful) error("HTTP ${resp.code}")
+                    val body = resp.body?.string() ?: error("Empty body")
+                    if (validate != null && !validate(body)) {
+                        errors += "${url.substringBefore("?")}: استجابة غير صالحة"
+                        return@use
+                    }
+                    if (activeEndpoint == null) activeEndpoint = url.substringBefore("?")
+                    return body
                 }
-                if (activeEndpoint == null) activeEndpoint = url.substringBefore("?")
-                return body
             } catch (e: Throwable) {
-                errors += "${url.substringBefore("?")}: ${e.message?.take(80) ?: e.javaClass.simpleName}"
+                errors += "${url.substringBefore("?")}: ${e.message?.take(80)}"
             }
         }
         throw Exception(errors.joinToString("\n").take(600))
+    }
+
+    // طلب متدفّق (للردود الضخمة) - يعيد InputStream
+    private fun openStream(params: String): InputStream {
+        val active = activeEndpoint
+            ?: throw IllegalStateException("يجب استدعاء handshake أولاً")
+        val url = "$active?$params&JsHttpRequest=1-xml"
+        val resp = http.newCall(buildRequest(url)).execute()
+        if (!resp.isSuccessful) {
+            resp.close()
+            error("HTTP ${resp.code}")
+        }
+        return resp.body?.byteStream() ?: run {
+            resp.close()
+            error("Empty body")
+        }
     }
 
     fun handshake() {
@@ -103,114 +122,178 @@ class StalkerClient(
         } catch (_: Throwable) {}
     }
 
+    // ====== تحليل متدفّق عام لـ {js:{data:[...]}} ======
+    private fun streamJsData(input: InputStream, onItem: (Map<String, String>) -> Unit) {
+        JsonReader(input.bufferedReader()).use { r ->
+            r.beginObject()
+            while (r.hasNext()) {
+                if (r.nextName() == "js") {
+                    r.beginObject()
+                    while (r.hasNext()) {
+                        if (r.nextName() == "data") {
+                            r.beginArray()
+                            while (r.hasNext()) {
+                                r.beginObject()
+                                val map = HashMap<String, String>(8)
+                                while (r.hasNext()) {
+                                    val key = r.nextName()
+                                    try {
+                                        map[key] = r.nextString()
+                                    } catch (_: Exception) {
+                                        r.skipValue()
+                                    }
+                                }
+                                r.endObject()
+                                onItem(map)
+                            }
+                            r.endArray()
+                        } else r.skipValue()
+                    }
+                    r.endObject()
+                } else r.skipValue()
+            }
+            r.endObject()
+        }
+    }
+
+    private fun streamJsArray(input: InputStream, onItem: (Map<String, String>) -> Unit) {
+        JsonReader(input.bufferedReader()).use { r ->
+            r.beginObject()
+            while (r.hasNext()) {
+                if (r.nextName() == "js") {
+                    r.beginArray()
+                    while (r.hasNext()) {
+                        r.beginObject()
+                        val map = HashMap<String, String>(8)
+                        while (r.hasNext()) {
+                            val key = r.nextName()
+                            try { map[key] = r.nextString() } catch (_: Exception) { r.skipValue() }
+                        }
+                        r.endObject()
+                        onItem(map)
+                    }
+                    r.endArray()
+                } else r.skipValue()
+            }
+            r.endObject()
+        }
+    }
+
     fun loadLiveChannels(): List<Channel> {
         handshake(); getProfile()
-        val js = try { JSONObject(request("type=itv&action=get_all_channels")).optJSONObject("js") } catch (_: Exception) { null }
-            ?: return emptyList()
-        val data = js.optJSONArray("data") ?: return emptyList()
-        val list = mutableListOf<Channel>()
-        for (i in 0 until data.length()) {
-            val o = try { data.getJSONObject(i) } catch (_: Exception) { continue }
-            val rawId = o.optString("id")
-            val cmd = o.optString("cmd")
-            if (cmd.isEmpty()) continue
-            list += Channel(
-                id = "sl_${rawId.ifBlank { "i$i" }}_$i",
-                name = o.optString("name", "Channel"),
-                url = cmd,
-                logo = o.optString("logo").takeIf { it.isNotBlank() && it != "null" },
-                group = o.optString("tv_genre_id").takeIf { it.isNotBlank() },
-                type = ChannelType.LIVE
-            )
+        val list = ArrayList<Channel>(2000)
+        var i = 0
+        openStream("type=itv&action=get_all_channels").use { input ->
+            streamJsData(input) { m ->
+                val cmd = m["cmd"].orEmpty()
+                if (cmd.isNotEmpty()) {
+                    val rawId = m["id"].orEmpty()
+                    val logo = m["logo"]?.takeIf { it.isNotBlank() && it != "null" }
+                    val group = m["tv_genre_id"]?.takeIf { it.isNotBlank() }
+                    list += Channel(
+                        id = "sl_${rawId.ifBlank { "i$i" }}_$i",
+                        name = m["name"]?.ifBlank { "Channel" } ?: "Channel",
+                        url = cmd,
+                        logo = logo,
+                        group = group,
+                        type = ChannelType.LIVE
+                    )
+                }
+                i++
+            }
         }
         return list
     }
 
     fun loadVod(): List<Channel> {
         handshake(); getProfile()
-        val body = request("type=vod&action=get_ordered_list&category=*&genre=*" +
-            "&force_ch_link_check=&fav=0&sortby=added&hd=0&p=1")
-        val js = try { JSONObject(body).optJSONObject("js") } catch (_: Exception) { null }
-            ?: return emptyList()
-        val data = js.optJSONArray("data") ?: return emptyList()
-        val list = mutableListOf<Channel>()
-        for (i in 0 until data.length()) {
-            val o = try { data.getJSONObject(i) } catch (_: Exception) { continue }
-            val rawId = o.optString("id")
-            val cmd = o.optString("cmd")
-            if (cmd.isEmpty()) continue
-            list += Channel(
-                id = "sv_${rawId.ifBlank { "i$i" }}_$i",
-                name = o.optString("name", "Movie"),
-                url = cmd,
-                logo = o.optString("screenshot_uri").takeIf { it.isNotBlank() && it != "null" },
-                group = null,
-                type = ChannelType.MOVIE
-            )
+        val list = ArrayList<Channel>(500)
+        var i = 0
+        openStream("type=vod&action=get_ordered_list&category=*&genre=*" +
+            "&force_ch_link_check=&fav=0&sortby=added&hd=0&p=1").use { input ->
+            streamJsData(input) { m ->
+                val cmd = m["cmd"].orEmpty()
+                if (cmd.isNotEmpty()) {
+                    val rawId = m["id"].orEmpty()
+                    val logo = m["screenshot_uri"]?.takeIf { it.isNotBlank() && it != "null" }
+                    list += Channel(
+                        id = "sv_${rawId.ifBlank { "i$i" }}_$i",
+                        name = m["name"]?.ifBlank { "Movie" } ?: "Movie",
+                        url = cmd,
+                        logo = logo,
+                        group = null,
+                        type = ChannelType.MOVIE
+                    )
+                }
+                i++
+            }
         }
         return list
     }
 
     fun loadSeries(): List<Channel> {
         handshake(); getProfile()
-        val body = request("type=series&action=get_ordered_list&category=*&genre=*" +
-            "&force_ch_link_check=&fav=0&sortby=added&hd=0&p=1")
-        val js = try { JSONObject(body).optJSONObject("js") } catch (_: Exception) { null }
-            ?: return emptyList()
-        val data = js.optJSONArray("data") ?: return emptyList()
-        val list = mutableListOf<Channel>()
-        for (i in 0 until data.length()) {
-            val o = try { data.getJSONObject(i) } catch (_: Exception) { continue }
-            val rawId = o.optString("id")
-            list += Channel(
-                id = "ss_${rawId.ifBlank { "i$i" }}_$i",
-                name = o.optString("name", "Series"),
-                url = rawId,
-                logo = o.optString("screenshot_uri").takeIf { it.isNotBlank() && it != "null" },
-                group = null,
-                type = ChannelType.SERIES
-            )
+        val list = ArrayList<Channel>(500)
+        var i = 0
+        openStream("type=series&action=get_ordered_list&category=*&genre=*" +
+            "&force_ch_link_check=&fav=0&sortby=added&hd=0&p=1").use { input ->
+            streamJsData(input) { m ->
+                val rawId = m["id"].orEmpty()
+                if (rawId.isNotEmpty()) {
+                    val logo = m["screenshot_uri"]?.takeIf { it.isNotBlank() && it != "null" }
+                    list += Channel(
+                        id = "ss_${rawId}_$i",
+                        name = m["name"]?.ifBlank { "Series" } ?: "Series",
+                        url = rawId,
+                        logo = logo,
+                        group = null,
+                        type = ChannelType.SERIES
+                    )
+                }
+                i++
+            }
         }
         return list
     }
 
     fun loadSeasons(seriesId: String): List<Season> {
-        val body = request("type=series&action=get_ordered_list&movie_id=$seriesId")
-        val js = try { JSONObject(body).optJSONObject("js") } catch (_: Exception) { null }
-            ?: return emptyList()
-        val arr = js.optJSONArray("data") ?: return emptyList()
+        handshake(); getProfile()
         val seasons = mutableListOf<Season>()
-        for (i in 0 until arr.length()) {
-            val o = try { arr.getJSONObject(i) } catch (_: Exception) { continue }
-            val sid = o.optString("id")
-            val num = o.optInt("season_number", i + 1)
-            val name = o.optString("name").ifBlank { "الموسم $num" }
-            if (sid.isNotEmpty()) seasons += Season(sid, name, num)
+        var i = 0
+        openStream("type=series&action=get_ordered_list&movie_id=$seriesId").use { input ->
+            streamJsData(input) { m ->
+                val sid = m["id"].orEmpty()
+                val num = m["season_number"]?.toIntOrNull() ?: (i + 1)
+                val name = m["name"]?.ifBlank { "الموسم $num" } ?: "الموسم $num"
+                if (sid.isNotEmpty()) seasons += Season(sid, name, num)
+                i++
+            }
         }
         return seasons.sortedBy { it.number }
     }
 
     fun loadEpisodes(seriesId: String, seasonId: String): List<Channel> {
-        val body = request("type=series&action=get_ordered_list&movie_id=$seriesId&season_id=$seasonId")
-        val js = try { JSONObject(body).optJSONObject("js") } catch (_: Exception) { null }
-            ?: return emptyList()
-        val arr = js.optJSONArray("data") ?: return emptyList()
         val eps = mutableListOf<Channel>()
-        for (i in 0 until arr.length()) {
-            val o = try { arr.getJSONObject(i) } catch (_: Exception) { continue }
-            val id = o.optString("id")
-            val cmd = o.optString("cmd")
-            if (cmd.isEmpty()) continue
-            val num = o.optInt("series_number", i + 1)
-            val title = o.optString("name").ifBlank { "حلقة $num" }
-            eps += Channel(
-                id = "se_${id}_$i",
-                name = "%02d. %s".format(num, title),
-                url = cmd,
-                logo = o.optString("screenshot_uri").takeIf { it.isNotBlank() && it != "null" },
-                group = null,
-                type = ChannelType.EPISODE
-            )
+        var i = 0
+        openStream("type=series&action=get_ordered_list&movie_id=$seriesId&season_id=$seasonId").use { input ->
+            streamJsData(input) { m ->
+                val cmd = m["cmd"].orEmpty()
+                if (cmd.isNotEmpty()) {
+                    val id = m["id"].orEmpty()
+                    val num = m["series_number"]?.toIntOrNull() ?: (i + 1)
+                    val title = m["name"]?.ifBlank { "حلقة $num" } ?: "حلقة $num"
+                    val logo = m["screenshot_uri"]?.takeIf { it.isNotBlank() && it != "null" }
+                    eps += Channel(
+                        id = "se_${id.ifBlank { "i$i" }}_$i",
+                        name = "%02d. %s".format(num, title),
+                        url = cmd,
+                        logo = logo,
+                        group = null,
+                        type = ChannelType.EPISODE
+                    )
+                }
+                i++
+            }
         }
         return eps.sortedBy { it.name }
     }
