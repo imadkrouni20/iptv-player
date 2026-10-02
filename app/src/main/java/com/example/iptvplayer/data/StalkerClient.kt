@@ -12,8 +12,9 @@ class StalkerClient(
     private val timezone: String = "Africa/Casablanca"
 ) {
     private val http = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(8, TimeUnit.SECONDS)
+        .callTimeout(12, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
         .build()
@@ -25,41 +26,34 @@ class StalkerClient(
     private val userAgent =
         "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG200 stbapp ver: 4 rev: 2721 Safari/533.3"
 
-    private val baseCandidates: List<String> = buildList {
+    private val baseUrls: List<String> = buildList {
         var p = portalUrl.trim()
         if (!p.startsWith("http")) p = "http://$p"
         p = p.trimEnd('/')
         listOf(
-            "/portal.php",
-            "/server/load.php",
-            "/stalker_portal/server/load.php",
-            "/c"
+            "/portal.php", "/server/load.php",
+            "/stalker_portal/server/load.php", "/c"
         ).forEach { suffix ->
             if (p.endsWith(suffix)) p = p.dropLast(suffix.length).trimEnd('/')
         }
-        add(p)
-        if (p.startsWith("http://")) add("https://" + p.removePrefix("http://"))
+        val hostPart = p.removePrefix("http://").removePrefix("https://")
+        add("http://$hostPart")
     }.distinct()
 
     private val endpointSuffixes = listOf(
         "/portal.php",
-        "/server/load.php",
-        "/stalker_portal/server/load.php",
-        "/c/portal.php"
+        "/c/portal.php",
+        "/server/load.php"
     )
 
     private fun candidateUrls(params: String): List<String> {
         val result = mutableListOf<String>()
-        for (base in baseCandidates) {
+        activeEndpoint?.let { result += "$it?$params&JsHttpRequest=1-xml" }
+        for (base in baseUrls) {
             for (suffix in endpointSuffixes) {
-                result += "$base$suffix?$params&JsHttpRequest=1-xml"
+                val url = "$base$suffix?$params&JsHttpRequest=1-xml"
+                if (!result.contains(url)) result += url
             }
-        }
-        val active = activeEndpoint
-        if (active != null) {
-            val activeUrl = "$active?$params&JsHttpRequest=1-xml"
-            result.remove(activeUrl)
-            result.add(0, activeUrl)
         }
         return result
     }
@@ -80,25 +74,23 @@ class StalkerClient(
 
     private fun request(params: String, validate: ((String) -> Boolean)? = null): String {
         val urls = candidateUrls(params)
-        val tried = mutableListOf<String>()
-        var lastError: Exception? = null
+        val errors = mutableListOf<String>()
         for (url in urls) {
-            tried += url.substringBefore("?")
             try {
                 val body = rawGet(url)
                 if (validate != null && !validate(body)) {
-                    lastError = IllegalStateException("استجابة غير صالحة")
+                    errors += "${url.substringBefore("?")}: استجابة غير صالحة"
                     continue
                 }
                 if (activeEndpoint == null) activeEndpoint = url.substringBefore("?")
                 return body
-            } catch (e: Exception) {
-                lastError = e
+            } catch (e: Throwable) {
+                val msg = e.message?.take(80) ?: e.javaClass.simpleName
+                errors += "${url.substringBefore("?")}: $msg"
             }
         }
-        val triedList = tried.distinct().joinToString("\n")
-        throw lastError?.let { Exception("${it.message}\n\nالمسارات المجرَّبة:\n$triedList") }
-            ?: error("فشل الاتصال\n$triedList")
+        val joined = errors.joinToString("\n")
+        throw Exception(joined.take(600))
     }
 
     fun handshake() {
@@ -106,35 +98,38 @@ class StalkerClient(
             params = "type=stb&action=handshake&prehash=0&token=",
             validate = { it.contains("\"js\"") }
         )
-        val json = JSONObject(body)
-        val js = json.optJSONObject("js") ?: error("استجابة handshake غير صالحة: $body")
+        val js = try { JSONObject(body).optJSONObject("js") } catch (_: Exception) { null }
+            ?: error("استجابة handshake غير صالحة")
         token = js.optString("token", "")
-        if (token.isEmpty()) error("توكن فارغ - الـ MAC غير مُفعّل على هذه البوابة")
+        if (token.isEmpty()) error("الـ MAC غير مُفعّل على هذه البوابة")
     }
 
     fun getProfile() {
-        request(
-            "type=stb&action=get_profile&hd=1&num_banks=2&sn=${System.currentTimeMillis()}" +
-                "&stb_type=MAG250&client_type=STB&image_version=218&video_out=hdmi" +
-                "&device_id=&device_id2=&signature=&auth_second_step=1&hw_version=1.7-BD-00" +
-                "&not_valid_token=0&metrics=%7B%7D&api_signature=262&mkv=true&hls=true"
-        )
+        try {
+            request(
+                "type=stb&action=get_profile&hd=1&num_banks=2&sn=${System.currentTimeMillis()}" +
+                    "&stb_type=MAG250&client_type=STB&image_version=218&video_out=hdmi" +
+                    "&device_id=&device_id2=&signature=&auth_second_step=1&hw_version=1.7-BD-00" +
+                    "&not_valid_token=0&metrics=%7B%7D&api_signature=262&mkv=true&hls=true"
+            )
+        } catch (_: Throwable) { /* بعض البوابات لا تحتاج profile */ }
     }
 
     fun loadLiveChannels(): List<Channel> {
         handshake()
         getProfile()
         val body = request("type=itv&action=get_all_channels")
-        val json = JSONObject(body)
-        val data = json.optJSONObject("js")?.optJSONArray("data") ?: return emptyList()
+        val js = try { JSONObject(body).optJSONObject("js") } catch (_: Exception) { null }
+            ?: return emptyList()
+        val data = js.optJSONArray("data") ?: return emptyList()
         val list = mutableListOf<Channel>()
         for (i in 0 until data.length()) {
-            val o = data.getJSONObject(i)
-            val id = o.optString("id")
+            val o = try { data.getJSONObject(i) } catch (_: Exception) { continue }
+            val rawId = o.optString("id")
             val cmd = o.optString("cmd")
             if (cmd.isEmpty()) continue
             list += Channel(
-                id = "stalker_live_$id",
+                id = "sl_${rawId.ifBlank { "i$i" }}_$i",
                 name = o.optString("name", "Channel"),
                 url = cmd,
                 logo = o.optString("logo").takeIf { it.isNotBlank() },
@@ -149,19 +144,20 @@ class StalkerClient(
         handshake()
         getProfile()
         val body = request(
-            "type=vod&action=get_ordered_list&category=*&genre=*&force_ch_link_check=" +
-                "&fav=0&sortby=added&hd=0&p=1"
+            "type=vod&action=get_ordered_list&category=*&genre=*" +
+                "&force_ch_link_check=&fav=0&sortby=added&hd=0&p=1"
         )
-        val json = JSONObject(body)
-        val data = json.optJSONObject("js")?.optJSONArray("data") ?: return emptyList()
+        val js = try { JSONObject(body).optJSONObject("js") } catch (_: Exception) { null }
+            ?: return emptyList()
+        val data = js.optJSONArray("data") ?: return emptyList()
         val list = mutableListOf<Channel>()
         for (i in 0 until data.length()) {
-            val o = data.getJSONObject(i)
-            val id = o.optString("id")
+            val o = try { data.getJSONObject(i) } catch (_: Exception) { continue }
+            val rawId = o.optString("id")
             val cmd = o.optString("cmd")
             if (cmd.isEmpty()) continue
             list += Channel(
-                id = "stalker_vod_$id",
+                id = "sv_${rawId.ifBlank { "i$i" }}_$i",
                 name = o.optString("name", "Movie"),
                 url = cmd,
                 logo = o.optString("screenshot_uri").takeIf { it.isNotBlank() },
@@ -179,8 +175,8 @@ class StalkerClient(
             "type=$t&action=create_link&cmd=$encoded&series=&forced_storage=undefined" +
                 "&disable_ad=0&download=0&force_ch_link_check=0"
         )
-        val json = JSONObject(body)
-        val js = json.optJSONObject("js") ?: error("create_link: no js")
+        val js = try { JSONObject(body).optJSONObject("js") } catch (_: Exception) { null }
+            ?: error("create_link: استجابة غير صالحة")
         var link = js.optString("cmd", "")
         if (link.isEmpty()) link = js.optString("id", "")
         val idx = link.indexOf("http")

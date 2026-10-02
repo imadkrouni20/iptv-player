@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
@@ -44,7 +45,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.darkColorScheme
@@ -111,6 +111,35 @@ fun App(vm: MainViewModel) {
     }
 }
 
+@Composable
+fun ErrorCard(message: String, onDismiss: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(12.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.15f)
+        )
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Text(
+                text = message,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.weight(1f),
+                maxLines = 12,
+                overflow = TextOverflow.Ellipsis
+            )
+            IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                Icon(Icons.Default.Close, contentDescription = "إغلاق",
+                    tint = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SubscriptionsListScreen(vm: MainViewModel, state: UiState) {
@@ -134,6 +163,9 @@ fun SubscriptionsListScreen(vm: MainViewModel, state: UiState) {
         }
     ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad)) {
+            state.error?.let {
+                ErrorCard(it) { vm.clearError() }
+            }
             if (state.subscriptions.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -176,8 +208,7 @@ fun SubscriptionCard(sub: Subscription, onOpen: () -> Unit, onDelete: () -> Unit
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
-                Modifier
-                    .size(48.dp)
+                Modifier.size(48.dp)
                     .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(12.dp)),
                 contentAlignment = Alignment.Center
             ) {
@@ -189,26 +220,16 @@ fun SubscriptionCard(sub: Subscription, onOpen: () -> Unit, onDelete: () -> Unit
             }
             Spacer(Modifier.size(14.dp))
             Column(Modifier.weight(1f)) {
-                Text(
-                    sub.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Text(sub.name, style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(2.dp))
-                val sub2 = when (sub.type) {
+                val detail = when (sub.type) {
                     "m3u" -> sub.m3uUrl
-                    "xtream" -> sub.host
                     else -> sub.host
                 }
-                Text(
-                    sub2,
-                    style = MaterialTheme.typography.bodySmall,
+                Text(detail, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             IconButton(onClick = onOpen) {
                 Icon(Icons.Default.PlayArrow, contentDescription = "تشغيل",
@@ -258,24 +279,18 @@ fun AddSubscriptionScreen(vm: MainViewModel, state: UiState) {
         ) {
             OutlinedTextField(
                 value = name, onValueChange = { name = it },
-                label = { Text("اسم الاشتراك") },
-                singleLine = true,
+                label = { Text("اسم الاشتراك") }, singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
-
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected = mode == 0, onClick = { mode = 0 }, label = { Text("M3U") })
                 FilterChip(selected = mode == 1, onClick = { mode = 1 }, label = { Text("Xtream") })
                 FilterChip(selected = mode == 2, onClick = { mode = 2 }, label = { Text("Stalker") })
             }
-
             when (mode) {
                 0 -> {
-                    OutlinedTextField(
-                        value = m3u, onValueChange = { m3u = it },
-                        label = { Text("رابط M3U") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    OutlinedTextField(m3u, { m3u = it }, label = { Text("رابط M3U") },
+                        modifier = Modifier.fillMaxWidth())
                     Button(
                         onClick = { vm.addM3u(name.trim(), m3u.trim()) },
                         enabled = m3u.isNotBlank() && !state.loading,
@@ -283,9 +298,12 @@ fun AddSubscriptionScreen(vm: MainViewModel, state: UiState) {
                     ) { Text("حفظ واتصال") }
                 }
                 1 -> {
-                    OutlinedTextField(host, { host = it }, label = { Text("Host (http://...)") }, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(user, { user = it }, label = { Text("Username") }, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(pass, { pass = it }, label = { Text("Password") }, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(host, { host = it }, label = { Text("Host") },
+                        modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(user, { user = it }, label = { Text("Username") },
+                        modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(pass, { pass = it }, label = { Text("Password") },
+                        modifier = Modifier.fillMaxWidth())
                     Button(
                         onClick = { vm.addXtream(name.trim(), host.trim(), user.trim(), pass.trim()) },
                         enabled = host.isNotBlank() && user.isNotBlank() && pass.isNotBlank() && !state.loading,
@@ -293,8 +311,10 @@ fun AddSubscriptionScreen(vm: MainViewModel, state: UiState) {
                     ) { Text("حفظ واتصال") }
                 }
                 else -> {
-                    OutlinedTextField(portal, { portal = it }, label = { Text("Portal URL") }, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(mac, { mac = it }, label = { Text("MAC Address") }, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(portal, { portal = it }, label = { Text("Portal URL") },
+                        modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(mac, { mac = it }, label = { Text("MAC Address") },
+                        modifier = Modifier.fillMaxWidth())
                     Button(
                         onClick = { vm.addStalker(name.trim(), portal.trim(), mac.trim()) },
                         enabled = portal.isNotBlank() && mac.isNotBlank() && !state.loading,
@@ -302,16 +322,14 @@ fun AddSubscriptionScreen(vm: MainViewModel, state: UiState) {
                     ) { Text("حفظ واتصال") }
                 }
             }
-
             if (state.loading) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                     Text("جارٍ الاتصال...")
                 }
             }
-            state.error?.let {
-                Text("خطأ: $it", color = MaterialTheme.colorScheme.error)
-            }
+            state.error?.let { ErrorCard(it) { vm.clearError() } }
         }
     }
 }
@@ -320,7 +338,6 @@ fun AddSubscriptionScreen(vm: MainViewModel, state: UiState) {
 @Composable
 fun ContentScreen(vm: MainViewModel, state: UiState) {
     var sortMenu by remember { mutableStateOf(false) }
-
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -343,18 +360,12 @@ fun ContentScreen(vm: MainViewModel, state: UiState) {
                             Icon(Icons.Default.Sort, contentDescription = "ترتيب")
                         }
                         DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
-                            DropdownMenuItem(
-                                text = { Text("افتراضي") },
-                                onClick = { vm.setSortMode(SortMode.DEFAULT); sortMenu = false }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("أ - ي") },
-                                onClick = { vm.setSortMode(SortMode.AZ); sortMenu = false }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("ي - أ") },
-                                onClick = { vm.setSortMode(SortMode.ZA); sortMenu = false }
-                            )
+                            DropdownMenuItem(text = { Text("افتراضي") },
+                                onClick = { vm.setSortMode(SortMode.DEFAULT); sortMenu = false })
+                            DropdownMenuItem(text = { Text("أ - ي") },
+                                onClick = { vm.setSortMode(SortMode.AZ); sortMenu = false })
+                            DropdownMenuItem(text = { Text("ي - أ") },
+                                onClick = { vm.setSortMode(SortMode.ZA); sortMenu = false })
                         }
                     }
                 },
@@ -382,30 +393,20 @@ fun ContentScreen(vm: MainViewModel, state: UiState) {
                     }
                 }
             }
-
+            state.error?.let { ErrorCard(it) { vm.clearError() } }
             OutlinedTextField(
-                value = state.search,
-                onValueChange = { vm.setSearch(it) },
-                label = { Text("بحث") },
-                singleLine = true,
+                value = state.search, onValueChange = { vm.setSearch(it) },
+                label = { Text("بحث") }, singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)
             )
-
             if (state.loading) {
-                Row(
-                    Modifier.fillMaxWidth().padding(16.dp),
+                Row(Modifier.fillMaxWidth().padding(16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                    verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                     Text("جارٍ التحميل...")
                 }
             }
-            state.error?.let {
-                Text("خطأ: $it", color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(16.dp))
-            }
-
             LazyColumn(Modifier.fillMaxSize()) {
                 items(state.channels, key = { it.id }) { ch ->
                     ListItem(
@@ -498,15 +499,13 @@ fun PlayerScreen(vm: MainViewModel, url: String, title: String) {
                 modifier = Modifier.align(Alignment.TopCenter)
             )
         } else {
-            Row(
-                Modifier.align(Alignment.TopEnd).padding(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
+            Row(Modifier.align(Alignment.TopEnd).padding(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 IconButton(onClick = { vm.backToList() }) {
                     Icon(Icons.Default.ArrowBack, contentDescription = "رجوع", tint = Color.White)
                 }
                 IconButton(onClick = { fullscreen = false }) {
-                    Icon(Icons.Default.FullscreenExit, contentDescription = "خروج من ملء الشاشة", tint = Color.White)
+                    Icon(Icons.Default.FullscreenExit, contentDescription = "خروج", tint = Color.White)
                 }
             }
         }
