@@ -1,0 +1,11 @@
+{
+  "id": "com.imad.iptvplayer",
+  "version": "1.0.0",
+  "vendor": "Imad",
+  "type": "web",
+  "main": "index.html",
+  "title": "IPTV Player",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "network": { "allowed": true }
+}

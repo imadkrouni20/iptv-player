@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IPTV Player</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#a970ff">
+    <script src="hls.min.js"></script>
+    <script src="mpegts.min.js"></script>
+</head>
+<body>
+
+<!-- ============ HOME VIEW ============ -->
+<div id="view-home" class="view active">
+    <div class="home-header">
+        <div class="brand">
+            <span class="logo">📺</span>
+            <span class="brand-name">IPTV Player</span>
+        </div>
+        <div class="home-user">
+            <div class="home-sub-info">
+                <div class="home-sub-name" id="home-sub-name">لا يوجد اشتراك</div>
+                <div class="home-sub-days" id="home-sub-days"></div>
+            </div>
+            <button id="btn-user" class="user-btn" title="المستخدم">👤</button>
+        </div>
+    </div>
+
+    <div class="home-cards">
+        <button class="home-card live-card" data-goto="live">
+            <div class="card-icon">📡</div>
+            <div class="card-title">قنوات</div>
+            <div class="card-sub">البث المباشر</div>
+        </button>
+        <button class="home-card movie-card" data-goto="movie">
+            <div class="card-icon">🎬</div>
+            <div class="card-title">أفلام</div>
+            <div class="card-sub">شاهد الأفلام</div>
+        </button>
+        <button class="home-card series-card" data-goto="series">
+            <div class="card-icon">🎞️</div>
+            <div class="card-title">مسلسلات</div>
+            <div class="card-sub">تصفح المسلسلات</div>
+        </button>
+        <button class="home-card settings-card" data-goto="settings">
+            <div class="card-icon">⚙️</div>
+            <div class="card-title">إعدادات</div>
+            <div class="card-sub">التطبيق والاشتراكات</div>
+        </button>
+    </div>
+
+    <div id="user-menu" class="user-menu hidden">
+        <div class="um-header">
+            <div class="um-name" id="um-name">اشتراكي</div>
+            <div class="um-days" id="um-days"></div>
+        </div>
+        <button id="um-switch">🔄 تبديل الاشتراك</button>
+        <button id="um-add">➕ إضافة اشتراك</button>
+        <button id="um-edit">✏️ تعديل الحالي</button>
+        <button id="um-delete" class="danger">🗑️ حذف الحالي</button>
+    </div>
+</div>
+
+<!-- ============ LIVE VIEW ============ -->
+<div id="view-live" class="view">
+    <header class="sub-header">
+        <button class="back-btn" data-back>←</button>
+        <h2>📡 القنوات المباشرة</h2>
+        <div class="sub-header-spacer"></div>
+    </header>
+    <div class="live-layout">
+        <aside class="sidebar">
+            <div class="filters">
+                <input type="text" id="live-search" placeholder="🔍 ابحث...">
+                <select id="live-category"><option value="">كل التصنيفات</option></select>
+                <button id="live-fav-btn" class="fav-btn" title="المفضلة">⭐</button>
+            </div>
+            <ul id="live-list"></ul>
+        </aside>
+        <section class="player-area">
+            <video id="player" controls playsinline muted></video>
+            <div id="overlay">
+                <div class="overlay-content">
+                    <h1>📺</h1>
+                    <p>اختر قناة للبدء</p>
+                </div>
+            </div>
+            <div id="info-bar"></div>
+        </section>
+    </div>
+</div>
+
+<!-- ============ MOVIE VIEW ============ -->
+<div id="view-movie" class="view">
+    <header class="sub-header">
+        <button class="back-btn" data-back>←</button>
+        <h2>🎬 الأفلام</h2>
+        <div class="sub-header-spacer"></div>
+    </header>
+    <div class="grid-filters">
+        <input type="text" id="movie-search" placeholder="🔍 ابحث عن فيلم...">
+        <select id="movie-category"><option value="">كل التصنيفات</option></select>
+        <button id="movie-fav-btn" class="fav-btn">⭐</button>
+    </div>
+    <div id="movie-grid" class="posters-grid"></div>
+</div>
+
+<!-- ============ SERIES VIEW ============ -->
+<div id="view-series" class="view">
+    <header class="sub-header">
+        <button class="back-btn" data-back>←</button>
+        <h2 id="series-title">🎞️ المسلسلات</h2>
+        <div class="sub-header-spacer"></div>
+    </header>
+    <div class="grid-filters">
+        <input type="text" id="series-search" placeholder="🔍 ابحث عن مسلسل...">
+        <select id="series-category"><option value="">كل التصنيفات</option></select>
+        <button id="series-fav-btn" class="fav-btn">⭐</button>
+    </div>
+    <div id="series-grid" class="posters-grid"></div>
+</div>
+
+<!-- ============ SETTINGS VIEW ============ -->
+<div id="view-settings" class="view">
+    <header class="sub-header">
+        <button class="back-btn" data-back>←</button>
+        <h2>⚙️ الإعدادات</h2>
+        <div class="sub-header-spacer"></div>
+    </header>
+    <div class="settings-page">
+        <div class="settings-section">
+            <h3>📋 الاشتراكات</h3>
+            <ul id="subs-list"></ul>
+            <button id="btn-add-new" class="primary-btn">➕ إضافة اشتراك جديد</button>
+        </div>
+        <div class="settings-section">
+            <h3>▶️ المشغل</h3>
+            <label class="radio-label"><input type="radio" name="player-pref" value="vlc" checked> <span>VLC (موصى به على Android)</span></label>
+            <label class="radio-label"><input type="radio" name="player-pref" value="builtin"> <span>المشغل الداخلي</span></label>
+        </div>
+        <div class="settings-section">
+            <h3>ℹ️ حول التطبيق</h3>
+            <p class="about-text">IPTV Player v1.0<br>يدعم Xtream Codes و M3U و Portal</p>
+        </div>
+    </div>
+</div>
+
+<!-- ============ MODAL: ADD SUB ============ -->
+<div id="modal" class="modal hidden">
+    <div class="modal-content">
+        <button class="close" data-close="modal">×</button>
+        <h2>إضافة اشتراك جديد</h2>
+        <label>اسم الاشتراك</label>
+        <input type="text" id="sub-name-input" placeholder="مثال: اشتراكي الأول">
+        <div class="tabs-sub">
+            <button class="sub-tab active" data-target="tab-m3u">M3U</button>
+            <button class="sub-tab" data-target="tab-xtream">Xtream</button>
+            <button class="sub-tab" data-target="tab-portal">Portal</button>
+        </div>
+        <div id="tab-m3u" class="tab-panel active">
+            <label>رابط M3U</label>
+            <input type="text" id="m3u-url" placeholder="http://...">
+            <button id="btn-m3u-url" class="primary">تحميل من الرابط</button>
+            <div class="divider">— أو —</div>
+            <label>ملف M3U</label>
+            <input type="file" id="m3u-file" accept=".m3u,.m3u8,.txt">
+            <button id="btn-m3u-file" class="primary">تحميل من الملف</button>
+        </div>
+        <div id="tab-xtream" class="tab-panel">
+            <label>Host</label>
+            <input type="text" id="xt-host" placeholder="http://example.com:8080">
+            <label>Username</label>
+            <input type="text" id="xt-user" placeholder="username">
+            <label>Password</label>
+            <div class="pass-wrap">
+                <input type="password" id="xt-pass" placeholder="password">
+                <button type="button" id="toggle-pass" class="eye-btn">👁️</button>
+            </div>
+            <button id="btn-xtream" class="primary">اتصال</button>
+        </div>
+        <div id="tab-portal" class="tab-panel">
+            <label>Portal URL</label>
+            <input type="text" id="pt-url" placeholder="http://example.com/c/">
+            <label>MAC Address</label>
+            <input type="text" id="pt-mac" placeholder="00:1A:79:XX:XX:XX">
+            <button id="btn-portal" class="primary">اتصال</button>
+        </div>
+        <div id="modal-msg"></div>
+    </div>
+</div>
+
+<!-- ============ MODAL: SWITCH SUB ============ -->
+<div id="modal-switch" class="modal hidden">
+    <div class="modal-content">
+        <button class="close" data-close="modal-switch">×</button>
+        <h2>تبديل الاشتراك</h2>
+        <ul id="switch-list"></ul>
+    </div>
+</div>
+
+<!-- ============ MODAL: SERIES DETAILS ============ -->
+<div id="modal-series" class="modal hidden">
+    <div class="modal-content series-modal">
+        <button class="close" data-close="modal-series">×</button>
+        <div class="series-detail-header">
+            <img id="sd-poster" class="sd-poster" src="" alt="">
+            <div class="sd-info">
+                <h2 id="sd-title">اسم المسلسل</h2>
+                <p id="sd-plot" class="sd-plot"></p>
+            </div>
+        </div>
+        <div class="seasons-tabs" id="seasons-tabs"></div>
+        <div id="sd-episodes" class="episodes-list"></div>
+    </div>
+</div>
+
+<!-- ============ LOCK SCREEN ============ -->
+<div id="lock-screen" class="lock-screen hidden">
+    <div class="lock-box">
+        <div class="lock-icon">🔒</div>
+        <h1>انتهت مدة الصلاحية</h1>
+        <p id="lock-msg">انتهت مدة صلاحية الاشتراك</p>
+        <p id="lock-sub">للتجديد، تواصل معنا عبر واتساب</p>
+        <a id="lock-wa" class="lock-btn wa-btn" target="_blank">📱 تجديد عبر واتساب</a>
+        <div class="lock-info"><span id="lock-date"></span></div>
+    </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
